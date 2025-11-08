@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ID/PWコピーツール（チェックボックス付き）</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 20px; background:#fafafa; }
+  h3 { margin: 0 0 8px; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  textarea { width:100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin-top:10px; }
+  .list { margin-top:12px; background:#fff; border:1px solid #e5e5e5; border-radius:10px; overflow:hidden; }
+  .row { display:grid; grid-template-columns: 28px 1fr auto; gap:10px; align-items:center; padding:10px 12px; border-top:1px solid #eee; }
+  .row:first-child { border-top:none; }
+  .meta { font-size:14px; }
+  .meta b { font-size:15px; }
+  .buttons { display:flex; gap:6px; flex-wrap:wrap; }
+  button { font-size:14px; padding:6px 10px; border:1px solid #ddd; background:#fff; border-radius:8px; }
+  button.primary { background:#0a84ff; color:#fff; border-color:#0a84ff; }
+  .topbar { display:flex; justify-content:space-between; align-items:center; margin-top:10px; }
+  .muted { color:#666; font-size:13px; }
+</style>
+</head>
+<body>
+
+<h3>ID / パスワード コピーツール</h3>
+
+<div class="toolbar">
+  <button id="exportBtn">選択数: <span id="checkedCount">0</span></button>
+  <span class="muted">（チェックは保存されます）</span>
+</div>
+
+<textarea id="input" placeholder="id:password を改行区切りで貼り付け" rows="5"></textarea><br>
+<div class="toolbar">
+  <button id="addBtn" class="primary">追加</button>
+  <button id="clearBtn">一覧をクリア</button>
+</div>
+
+<div id="list" class="list" aria-live="polite"></div>
+
+<script>
+const KEY = 'coloncopy.items.v1';
+let items = []; // {uid, idtxt, pwtxt, checked}
+
+function save(){ localStorage.setItem(KEY, JSON.stringify(items)); }
+function load(){
+  try { items = JSON.parse(localStorage.getItem(KEY) || '[]'); }
+  catch(e){ items = []; }
+}
+
+function updateCheckedCount(){
+  const n = items.filter(x => x.checked).length;
+  document.getElementById('checkedCount').textContent = n;
+}
+
+function esc(s){ return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+function render(){
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  if(items.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'row';
+    empty.style.color = '#666';
+    empty.textContent = 'データがありません。上の欄に id:password を貼って［追加］してください。';
+    list.appendChild(empty);
+    updateCheckedCount();
+    return;
+  }
+
+  for(const it of items){
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    // checkbox
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!it.checked;
+    cb.addEventListener('change', () => {
+      it.checked = cb.checked;
+      save(); updateCheckedCount();
+    });
+    row.appendChild(cb);
+
+    // id/pw 表示
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = `<div><b>ID:</b> ${esc(it.idtxt)}　<b>PW:</b> ${esc(it.pwtxt)}</div>`;
+    // 行全体タップで「id:password」コピー
+    meta.addEventListener('click', () => copyText(`${it.idtxt}:${it.pwtxt}`));
+    row.appendChild(meta);
+
+    // ボタン群
+    const btns = document.createElement('div');
+    btns.className = 'buttons';
+
+    const idBtn = document.createElement('button');
+    idBtn.textContent = 'IDコピー';
+    idBtn.addEventListener('click', (e)=>{ e.stopPropagation(); copyText(it.idtxt); });
+    btns.appendChild(idBtn);
+
+    const pwBtn = document.createElement('button');
+    pwBtn.textContent = 'PWコピー';
+    pwBtn.addEventListener('click', (e)=>{ e.stopPropagation(); copyText(it.pwtxt); });
+    btns.appendChild(pwBtn);
+
+    const bothBtn = document.createElement('button');
+    bothBtn.textContent = '両方コピー';
+    bothBtn.addEventListener('click', (e)=>{ e.stopPropagation(); copyText(`${it.idtxt}:${it.pwtxt}`); });
+    btns.appendChild(bothBtn);
+
+    row.appendChild(btns);
+    list.appendChild(row);
+  }
+  updateCheckedCount();
+}
+
+function addLines(raw){
+  const lines = raw.split('\n')
+    .map(s => s.trim())
+    .filter(s => s && s.includes(':'));
+
+  for(const line of lines){
+    const idx = line.indexOf(':'); // 最初のコロンだけで分割（パスワード内のコロンは許容）
+    const idtxt = line.slice(0, idx).trim();
+    const pwtxt = line.slice(idx+1).trim();
+    if(!idtxt) continue;
+    // 重複（id+pw完全一致）を避ける
+    const exists = items.some(it => it.idtxt === idtxt && it.pwtxt === pwtxt);
+    if(!exists){
+      items.push({ uid: cryptoRandom(), idtxt, pwtxt, checked:false });
+    }
+  }
+  save(); render();
+}
+
+function cryptoRandom(){
+  try {
+    const buf = new Uint8Array(8);
+    crypto.getRandomValues(buf);
+    return Array.from(buf).map(b=>b.toString(16).padStart(2,'0')).join('');
+  } catch { return String(Date.now()) + Math.random().toString(16).slice(2); }
+}
+
+function copyText(text){
+  navigator.clipboard.writeText(text).then(()=>{
+    alert(`コピーしました: ${text}`);
+  }).catch(()=>{
+    alert('クリップボードにコピーできません（HTTPSで開いているか、Safariの設定をご確認ください）');
+  });
+}
+
+// --- イベント ---
+document.getElementById('addBtn').addEventListener('click', () => {
+  const val = document.getElementById('input').value.trim();
+  if(!val){ alert('id:password を入力してください'); return; }
+  addLines(val);
+  document.getElementById('input').value = '';
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  if(confirm('一覧をクリアしますか？（チェック状態も消えます）')){
+    items = []; save(); render();
+  }
+});
+
+document.getElementById('exportBtn').addEventListener('click', () => {
+  // 参考：チェック済みだけを id:password でまとめてコピーしたい場合
+  const picked = items.filter(x=>x.checked).map(x=>`${x.idtxt}:${x.pwtxt}`).join('\n');
+  if(!picked){ alert('チェック済みの行がありません'); return; }
+  copyText(picked);
+});
+
+// 起動時
+load(); render();
+</script>
+</body>
+</html>
